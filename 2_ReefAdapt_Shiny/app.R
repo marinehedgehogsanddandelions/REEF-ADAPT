@@ -21,8 +21,26 @@ library("webshot")
 library("shinysky")
 library("htmlwidgets")
 library("shinyscreenshot")
-
+library(reticulate)
+library(rjson)
 ###########################################
+
+
+### Initialise Eratos ###
+
+eratosAdapter <- reticulate::import("eratos.adapter")
+eratosCreds  <- reticulate::import("eratos.creds")
+
+
+path_to_eratos_creds = "~/REEFADAPT/eratos_metadata_templates/mycreds.json"
+creds = fromJSON(file = path_to_eratos_creds)
+
+at <- eratosCreds$AccessTokenCreds(creds$key[1], creds$secret[1])
+ad <- eratosAdapter$Adapter(at)
+
+####
+
+
 
 # List variables for the sidebar:
 metadata <- read.csv("data/metadata.csv", stringsAsFactors = TRUE) #import metadata
@@ -49,26 +67,37 @@ ui <- fluidPage(
                 selectInput("region_selection", "Region:", choices = NULL, selected = NULL),
                 selectInput("marker_selection", "Marker:", choices = NULL, selected = NULL),
                 tags$p("Click This to Show Input Region"),
-                actionButton("show", "Show Region"),
+                actionButton("show_region", "Show Region"),
                 tags$hr(),
                 textInput("lat_selection","Latitude:"),
                 textInput("lon_selection","Longitude:"),
                 selectInput("year_selection", "Year:", choices = NULL, selected = NULL),
                 actionButton("calc", "Calculate Something"),
+                downloadButton("download_report", "Download Report"),
                 tags$hr(),
                 checkboxInput("show_advanced", "Show Advanced Options"),
+                
                 conditionalPanel(
                   condition = "input.show_advanced == true",
                   sliderInput("FST_threshold", "FST threshold (default is 0.05):", min = 0, max = 1, value = 0.05, step = 0.01),
                   checkboxInput("show_survey_gaps", "Overlay model bounds", value = FALSE),
-                  checkboxInput("RCP", "RCP scenario"),
                   textInput("textInputId1", "Please cite", value = "Wood, G. et al 2023. ReefAdapt: a novel tool for marine climate provenancing"),
-                  textInput("textInputId2", "Genetic Data Sources", value = NULL)),
-                screenshotButton(label = "Take screenshot", filename = "ReefAdaptMap", server_dir = "Reports/"),
-                actionButton("report", "Download Report"),
-                textOutput("output_text"),)
+                  textInput("textInputId2", "Genetic Data Sources", value = NULL),
+                  downloadButton("download_templates", "Download Templates"),
+                  tags$hr(),
+                  fileInput("upload_to_eratos", "Upload CSV or Zip File to Eratos",
+                            accept = c(
+                              "text/csv",
+                              ".zip",
+                              ".csv")
+                            
+                  )
+                )
+                #screenshotButton(label = "Take screenshot", filename = "ReefAdaptMap", server_dir = "Reports/"),
+                
+                
+  )
 )
-
 
 #helper function
 # Helper function to check if the click is inside the rangepoly
@@ -169,10 +198,6 @@ server <- function(input, output, session) {
       selected_values$genus <- Genus
     }
     
-    
-    
-    
-    
   })
   
   
@@ -217,66 +242,80 @@ server <- function(input, output, session) {
   # 1.  Input distribtuion ####
   
   
-  observeEvent(input$show, {
-    #print(input$species_selection)
-    
-    
-    
-    #input$genus_selection, input$region_selection, input$marker_selection
-    req(input$species_selection, input$genus_selection, input$region_selection, input$marker_selection)  # Wait for all selections to be made
-    #print("pass")
-    Genus <- input$genus_selection
-    Species <- input$species_selection
-    Marker <- input$marker_selection
-    Region <- input$region_selection
-    spp <- paste0(Genus, Species)  # Use paste0 to concatenate without spaces
-    
-    study_path <- paste("output","/", "transformed_gdm_rasters", "/",spp, "/", Region, "/", Marker, "/", sep = ""  )
-    print(study_path)
-    rds_combo <- list.files(path = study_path, pattern = "current_", full.names = FALSE) 
-    refid <- gsub("current_", "", rds_combo)
-    refid <- gsub(".rds", "", refid)
-    created_values$refid <- refid
-    
-    
-    # 1.  Map details ####
-    # species range 
-    raster_file <- paste("output/species_ranges_bioregions/", refid, ".rds", sep = "") # Modify the filename format as per your needs
-    print(raster_file)  # Print raster_file to check the constructed filename
-    Range <- readRDS(raster_file)
-    Range <- Range/Range
-    created_values$Range <- Range
-    rangepoly <- rasterToPolygons(Range)
-    rangepoly <- gUnaryUnion(rangepoly)
-    created_values$rangepoly <- rangepoly
-    ### add to map ####
-    
-    leafletProxy('ReefAdapt') %>%
-      clearGroup('rangepoly_group') %>%
-      clearImages() %>%
-      clearPopups()
-    
-    leafletProxy('ReefAdapt') %>%
-      clearGroup('green_circles') 
-    
-    leafletProxy('ReefAdapt') %>%
-      clearGroup('red_circles') 
-    
-    leafletProxy('ReefAdapt') %>%
-      clearGroup('circles')
-    
-    leafletProxy('ReefAdapt') %>%
-      addPolygons(data = rangepoly, fillColor = "white", fillOpacity = 0.3,group='rangepoly_group',
-                  highlightOptions = highlightOptions(color = "white", weight = 1)) 
-    
-    updateTextInput(session, "lat_selection", label = "Latitude:", value = "")
-    updateTextInput(session, "lon_selection", label = "Longitude:", value = "")
+  observeEvent(input$show_region, {
+    print("region")
+    print(input$genus_selection)
+    if (input$genus_selection != "") {
+      # code to execute if value is not NULL
+      
+      print('yes')
+      #input$genus_selection, input$region_selection, input$marker_selection
+      req(input$species_selection, input$genus_selection, input$region_selection, input$marker_selection)  # Wait for all selections to be made
+      #print("pass")
+      Genus <- input$genus_selection
+      Species <- input$species_selection
+      Marker <- input$marker_selection
+      Region <- input$region_selection
+      spp <- paste0(Genus, Species)  # Use paste0 to concatenate without spaces
+      
+      study_path <- paste("output","/", "transformed_gdm_rasters", "/",spp, "/", Region, "/", Marker, "/", sep = ""  )
+      print(study_path)
+      rds_combo <- list.files(path = study_path, pattern = "current_", full.names = FALSE) 
+      refid <- gsub("current_", "", rds_combo)
+      refid <- gsub(".rds", "", refid)
+      created_values$refid <- refid
+      
+      
+      # 1.  Map details ####
+      # species range 
+      raster_file <- paste("output/species_ranges_bioregions/", refid, ".rds", sep = "") # Modify the filename format as per your needs
+      print(raster_file)  # Print raster_file to check the constructed filename
+      Range <- readRDS(raster_file)
+      Range <- Range/Range
+      created_values$Range <- Range
+      rangepoly <- rasterToPolygons(Range)
+      rangepoly <- gUnaryUnion(rangepoly)
+      created_values$rangepoly <- rangepoly
+      ### add to map ####
+      
+      leafletProxy('ReefAdapt') %>%
+        clearGroup('rangepoly_group') %>%
+        clearImages() %>%
+        clearPopups()
+      
+      leafletProxy('ReefAdapt') %>%
+        clearGroup('green_circles') 
+      
+      leafletProxy('ReefAdapt') %>%
+        clearGroup('red_circles') 
+      
+      leafletProxy('ReefAdapt') %>%
+        clearGroup('circles')
+      
+      leafletProxy('ReefAdapt') %>%
+        addPolygons(data = rangepoly, fillColor = "white", fillOpacity = 0.3,group='rangepoly_group',
+                    highlightOptions = highlightOptions(color = "white", weight = 1)) 
+      
+      updateTextInput(session, "lat_selection", label = "Latitude:", value = "")
+      updateTextInput(session, "lon_selection", label = "Longitude:", value = "")
+      
+    }else{
+      print('no')
+      showModal(modalDialog(
+        title = "Error",
+        "You must select a genus before clicking Show Region",
+        easyClose = TRUE,
+        footer = NULL
+      ))
+      
+      
+    }
   })
   
   
   observeEvent(input$calc, {
     print('calc')
-    if (!anyNA(created_values$rest.site)){
+    if (!is.null(created_values$rest.site)){
       rest.site1 <- SpatialPointsDataFrame(coords = created_values$rest.site, proj4string = crs(test_raster), data = created_values$rest.site)
       req(input$species_selection, input$genus_selection, input$region_selection, input$marker_selection)  # Wait for all selections to be made
       #print("pass")
@@ -589,6 +628,15 @@ server <- function(input, output, session) {
   
   # #### survey gaps ####
   observeEvent(input$show_survey_gaps, {
+    
+    
+    showModal(modalDialog(
+      title = "Error",
+      "You must fill in all values before clicking calculate",
+      easyClose = TRUE,
+      footer = NULL
+    ))
+    
     if (input$show_survey_gaps) {
       Marker <- input$marker_selection
       Genus <- input$genus_selection
@@ -714,10 +762,117 @@ server <- function(input, output, session) {
     
   } 
   )
-  # 4. Similarity analysis ####
-  observeEvent(input$genus_selection,{
+  
+  # 1.  Download dynamic report ####
+  output$download_report <- downloadHandler(
+    filename = function() {
+      paste("dynamic-report-", Sys.Date(), ".pdf", sep="")
+    },
+    content = function(file) {
+      # Path to the R Markdown template
+      src <- "~/REEFADAPT/report_template/reef_adapt_report_template.Rmd"
+      
+      # Temporarily generate the report file before download
+      tempReport <- tempfile(fileext = ".pdf")
+      
+      # Render the report
+      render(src, output_file = file,
+             params = list(textInput = input$genus_selection),
+             envir = new.env(parent = globalenv()))
+    }
+  )
+  
+  
+  # Upload to Eratos
+  observeEvent(input$upload_to_eratos, {
+    
+    #print('yes')
+    
+    inFile <- input$upload_to_eratos
+    if (is.null(inFile)) {
+      return("No file uploaded yet.")
+    }
+    
+    # Extract the filename and temporary file path
+    fileName <- inFile$name
+    filePath <- inFile$datapath
+    print(fileName)
+    print(filePath)
+    # Use the filename and file path for downstream tasks
+    # For demonstration, just display the information
+    #paste("Uploaded filename:", fileName, "\nTemporary file path:", filePath)
+    
+    
+    block <- list(
+      "@type" = 'ern:e-pn.io:schema:block',
+      "@id" = "ern:e-pn.io:resource:reefadapt.blocks.test2",
+      'primary' = "ern:e-pn.io:resource:reefadapt.dataset.test2",
+      'name' = 'Reef Adapt Upload Test from App into Space',
+      'description' = 'Reef Adapt test upload block',
+      'licenses' = list("ern:e-pn.io:resource:eratos.licenses.cc-by-40"),
+      'pricing' = list("ern:e-pn.io:resource:eratos.pricing.free"),
+      'creator' = "ern:e-pn.io:resource:eratos.creator.reefadapt"
+    )
+    
+    block_res = ad$Resource(json=toJSON(block))
+    
+    blk_id <- block_res$save()
+    
+    dataset <- list(
+      "@type" = 'ern:e-pn.io:schema:dataset',
+      "@id" = "ern:e-pn.io:resource:reefadapt.dataset.test2",
+      'name' = 'Reef Adapt Templates of files dataset',
+      'description' = 'Reef Adapt test upload dataset',
+      'type' = "ern:e-pn.io:resource:eratos.dataset.type.csv",
+      'updateSchedule' = "ern:e-pn.io:resource:eratos.schedule.noupdate"
+    )
+    
+    dataset_res = ad$Resource(json=toJSON(dataset))
+    
+    dataset_res$set_prop('@owner', blk_id$ern())
+    
+    dataset_id <- dataset_res$save()
+    
+    file_str_name <- as.character(fileName)
+    file_str_path <- as.character(filePath)
+    
+    
+    test_list = list(
+      "upload_file.csv" = file_str_path
+    )
+    
+    
+    dataset_id$data()$push_objects('ern::node:au-1.e-gn.io', objects=test_list)
+    
+    # reef adapt space
+    space_ern <- 'ern:e-pn.io:resource:eratos.sidecars.0715ea01-63b2-469f-b369-9332d4ca967e.space'
+    space <- ad$Resource(ern = space_ern)
+    space_collection <- ad$Resource(ern = space$prop('collection'))
+    
+    space_collection$perform_action('AddItems', list("items" = list(list('ern' = as.character(blk_id$ern()), 'inheritPermissions' = TRUE))))
+    
+    print('upload done')
     
   })
+  
+  # Download template files
+  output$download_templates <- downloadHandler(
+    filename = function() {
+      paste("templates-", Sys.Date(), ".zip", sep = "")
+    },
+    content = function(file) {
+      # Specify the path to the folder containing the templates
+      directoryPath <- "~/REEFADAPT/upload_example_files"
+      
+      filePaths <- list.files(directoryPath, full.names = TRUE)
+      filesOnly <- filePaths[!file.info(filePaths)$isdir]
+      
+      # Create a temporary ZIP file containing only the files (no directories)
+      zip::zip(zipfile = file, files = filesOnly, mode = 'cherry-pick')
+      
+    }
+  )
+  
   
 }
 
